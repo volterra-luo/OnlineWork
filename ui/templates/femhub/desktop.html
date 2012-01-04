@@ -1,0 +1,41 @@
+{% extends femhub.html %}
+
+{% block modules %}
+    {% for module, _, css_files, js_files in modules %}
+        {% for css_file in css_files %}
+            <link href="{{ static_url(css_file) }}" rel="stylesheet" type="text/css" />
+        {% end %}
+
+        {% for js_file in js_files %}
+            <script src="{{ static_url(js_file) }}" type="text/javascript"></script>
+        {% end %}
+    {% end %}
+{% end %}
+
+{% block runtime %}
+
+{% import os %}
+{% set static = settings.static_path %}
+{% set external = 'external' %}
+{% set mesheditor = 'MeshEditor.swf' %}
+{% set path = os.path.join(static, external, mesheditor) %}
+
+FEMhub.Lab.run({
+    init: function() {
+        Ext.QuickTips.init();
+    },
+    modules: [
+        FEMhub.Modules.Browser,
+        {% if os.path.exists(path) %}
+        FEMhub.Modules.MeshEditor,
+        {% end %}
+        {% for _, cls, _, _ in modules %}
+            {{ cls }},
+        {% end %}
+        FEMhub.Modules.Settings,
+        FEMhub.Modules.Help,
+        FEMhub.Modules.Logout,
+    ],
+});
+{% end %}
+
