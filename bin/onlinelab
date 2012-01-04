@@ -1,0 +1,412 @@
+#!/usr/bin/env python
+
+import os
+import re
+import sys
+import logging
+import argparse
+
+def sys_path_hack(args):
+    """Hook in-tree Online Lab mode into Python path. """
+    script_dir = os.path.dirname(__file__)              # bin/onlinelab
+    module_top = os.path.split(script_dir)[0]           # ../
+    module_dir = os.path.join(module_top, 'onlinelab')  # ../onlinelab/
+
+    if os.path.isdir(module_dir):
+        args.python_path.insert(0, os.path.abspath(module_top))
+
+def expand(path):
+    """Expand ~ construct and shell variables. """
+    if path is not None:
+        return os.path.expandvars(os.path.expanduser(path))
+    else:
+        return None
+
+def path(string):
+    """Convert a string to an absolute path. """
+    if string is not None:
+        return os.path.abspath(expand(string))
+    else:
+        return None
+
+def existing_path(string):
+    """Make sure that an absolute path exists. """
+    if string is not None:
+        string = path(string)
+
+        if os.path.exists(string):
+            return string
+        else:
+            raise ValueError("'%s' does not exist" % string)
+    else:
+        return None
+
+def boolean(string):
+    """Convert a string to a boolean value. """
+    string = string.lower()
+
+    if string in ['0', 'f', 'false', 'no', 'off']:
+        return False
+
+    if string in ['1', 't', 'true', 'yes', 'on']:
+        return True
+
+    raise ValueError("'%s' can't be treated as a boolean option" % string)
+
+class PathAction(argparse.Action):
+    """Handle colon-separated, relative paths. """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = map(path, values.split(os.path.pathsep))
+
+        paths = getattr(namespace, self.dest)
+        paths.extend(values)
+
+        setattr(namespace, self.dest, paths)
+
+class VersionAction(argparse.Action):
+    """Display version information and quit. """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        sys_path_hack()
+
+        from onlinelab import __version__
+        print "Online Lab version %s" % __version__
+
+        sys.exit(0)
+
+class ConfigureAction(argparse.Action):
+    """Configure-style boolean options. """
+
+    def __init__(self,
+                 option_strings,
+                 dest,
+                 default=None,
+                 required=False,
+                 help=None,
+                 metavar=None,
+                 positive_prefixes=['--', '--with-', '--enable-'],
+                 negative_prefixes=['--no-', '--without-', '--disable-']):
+        strings = []
+
+        self.positive_strings = set()
+        self.negative_strings = set()
+
+        for string in option_strings:
+            assert re.match(r'--[A-z]+', string)
+
+            suffix = string[2:]
+
+            for positive_prefix in positive_prefixes:
+                self.positive_strings.add(positive_prefix + suffix)
+                strings.append(positive_prefix + suffix)
+
+            for negative_prefix in negative_prefixes:
+                self.negative_strings.add(negative_prefix + suffix)
+                strings.append(negative_prefix + suffix)
+
+        super(ConfigureAction, self).__init__(
+            option_strings=strings,
+            dest=dest,
+            nargs='?',
+            const=None,
+            default=default,
+            type=boolean,
+            choices=None,
+            required=required,
+            help=help,
+            metavar=metavar)
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        if value is None:
+            value = option_string in self.positive_strings
+        elif option_string in self.negative_strings:
+            value = not value
+
+        setattr(namespace, self.dest, value)
+
+class Module(object):
+    """Base class for Online Lab modules. """
+
+    def __init__(self, args):
+        getattr(self, args.func)(args)
+
+    def _configure(self, args):
+        from onlinelab.utils import configure
+        return configure(args)
+
+class SDK(Module):
+    """Online Lab SDK module. """
+
+    def init(self, args):
+        """Initialize a new SDK server. """
+        import onlinelab.sdk.runtime
+        onlinelab.sdk.runtime.init(args)
+
+    def install(self, args):
+        """Install a package in SDK server. """
+        import onlinelab.sdk.runtime
+        packages = args.packages
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.install(packages, settings)
+
+    def start(self, args):
+        """Start an existing SDK server. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.start(settings)
+
+    def stop(self, args):
+        """Stop a running SDK server. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.stop(settings)
+
+    def restart(self, args):
+        """Restart a running SDK server. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.restart(settings)
+
+    def status(self, args):
+        """Display information about a SDK server. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.status(settings)
+
+    def purge(self, args):
+        """Remove all contents from the database. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.purge(args, settings)
+
+    def dump(self, args):
+        """Dump contents of the database to a file. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.dump(args, settings)
+
+    def load(self, args):
+        """Load contents of the database from a file. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.load(args, settings)
+
+    def run(self, args):
+        """Run code in the context of Online Lab SDK. """
+        import onlinelab.sdk.runtime
+        settings = self._configure(args)
+        onlinelab.sdk.runtime.run(args, settings)
+
+class OnlineLab(object):
+    """Command-line based interface to Online Lab. """
+
+    options = {
+        'python-path': (
+            ('--python-path',), {
+                'default': [],
+                'action': PathAction,
+            },
+        ),
+        'version': (
+            ('--version',), {
+                'nargs': 0,
+                'action': VersionAction,
+            },
+        ),
+        'home': (
+            ('--home',), {
+                'default': '.',
+                'type': path,
+            },
+        ),
+        'force': (
+            ('--force',), {
+                'default': False,
+                'action': ConfigureAction,
+            },
+        ),
+        'port': (
+            ('--port',), {
+                'type': int,
+            },
+        ),
+        'debug': (
+            ('--debug',), {
+                'action': ConfigureAction,
+            },
+        ),
+        'daemon': (
+            ('--daemon',), {
+                'action': ConfigureAction,
+            },
+        ),
+        'pid-file': (
+            ('--pid-file',), {},
+        ),
+        'log-file': (
+            ('--log-file',), {},
+        ),
+        'log-level': (
+            ('--log-level',), {
+                'choices': ('none', 'info', 'warning', 'error'),
+            },
+        ),
+        'log-max-size': (
+            ('--log-max-size',), {
+                'type': int,
+            },
+        ),
+        'log-num-backups': (
+            ('--log-num-backups',), {
+                'type': int,
+            },
+        ),
+        'ui-path': (
+            ('--ui-path',), {
+                'required': True,
+                'type': existing_path,
+            },
+        ),
+        'logs-path': (
+            ('--logs-path',), {
+                'type': path,
+            },
+        ),
+        'data-path': (
+            ('--data-path',), {
+                'type': path,
+            },
+        ),
+        'static-path': (
+            ('--static-path',), {
+                'type': path,
+            },
+        ),
+        'templates-path': (
+            ('--templates-path',), {
+                'type': path,
+            },
+        ),
+        'config-file': (
+            ('--config-file',), {
+                'type': path,
+            },
+        ),
+        'provider': (
+            ('--provider',), {},
+        ),
+        'description': (
+            ('--description',), {},
+        ),
+        'setuid': (
+            ('--setuid',), {
+                'action': ConfigureAction,
+            },
+        ),
+        'auth': (
+            ('--auth',), {
+                'action': ConfigureAction,
+            },
+        ),
+        'evaluate-timeout': (
+            ('--evaluate-timeout',), {
+                'type': int,
+            },
+        ),
+        'engine-timeout': (
+            ('--engine-timeout',), {
+                'type': int,
+            },
+        ),
+        'package': (
+            ('--package',), {
+                'action': 'append',
+                'dest': 'packages',
+            },
+        ),
+        'path': (
+            ('--path',), {
+                'type': path,
+            },
+        ),
+        'purge': (
+            ('--purge',), {
+                'action': ConfigureAction,
+                'default': False,
+            },
+        ),
+        'dry-run': (
+            ('--dry-run',), {
+                'action': ConfigureAction,
+                'default': False,
+            },
+        ),
+        'code': (
+            ('--code',), {
+                'action': 'append',
+                'dest': 'codes',
+                'type': str,
+            },
+        ),
+    }
+
+    modules = {
+        'sdk': {
+            'init': ['ui-path'],
+            'install': ['package'],
+            'start': ['port', 'daemon', 'pid-file', 'log-file', 'log-level', 'log-max-size',
+                'log-num-backups', 'logs-path', 'data-path', 'static-path', 'templates-path',
+                'auth', 'evaluate-timeout', 'engine-timeout'],
+            'stop': ['port', 'pid-file', 'log-file', 'log-level'],
+            'restart': [],
+            'status': [],
+            'purge': [],
+            'dump': ['path', 'purge'],
+            'load': ['path', 'purge', 'dry-run'],
+            'run': ['code'],
+        },
+    }
+
+    module_map = {'sdk': SDK}
+
+    commons = ['python-path', 'home', 'config-file', 'force', 'debug']
+
+    def __init__(self):
+        """Construct command-line parser based on global settings. """
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+
+        args, kwargs = self.options['version']
+        parser.add_argument(*args, **kwargs)
+
+        for module, funcs in self.modules.iteritems():
+            module_parser = subparsers.add_parser(module)
+            module_parser.set_defaults(module=module)
+
+            module_subparsers = module_parser.add_subparsers()
+
+            for func, specs in funcs.iteritems():
+                func_parser = module_subparsers.add_parser(func)
+                func_parser.set_defaults(func=func)
+
+                for spec in self.commons + specs:
+                    args, kwargs = self.options[spec]
+                    func_parser.add_argument(*args, **kwargs)
+
+        self.parser = parser
+
+    def run(self):
+        """Parse command-line and run appropriate module. """
+        args = self.parser.parse_args()
+
+        sys_path_hack(args)
+
+        for path in args.python_path:
+            sys.path.insert(0, path)
+
+        self.module_map[args.module](args)
+
+if __name__ == "__main__":
+    OnlineLab().run()
+
