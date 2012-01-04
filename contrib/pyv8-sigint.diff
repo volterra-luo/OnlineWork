@@ -1,0 +1,79 @@
+Index: src/Exception.h
+===================================================================
+--- src/Exception.h	(revision 284)
++++ src/Exception.h	(working copy)
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <Python.h>
++
+ #include <cassert>
+ #include <stdexcept>
+ 
+@@ -165,8 +167,19 @@
+ 
+   static void ThrowIf(v8::TryCatch& try_catch)
+   {
+-    if (try_catch.HasCaught()) throw CJavascriptException(try_catch);    
++    if (try_catch.HasCaught()) {
++        if (try_catch.CanContinue())
++        {
++            throw CJavascriptException(try_catch);
+   }
++        else
++        {
++            PyErr_SetString(PyExc_KeyboardInterrupt, "");
++            py::throw_error_already_set();
++        }
++    }
++  }
+ 
+   static void Expose(void);
+-};
+\ No newline at end of file
++};
++
+Index: src/Engine.cpp
+===================================================================
+--- src/Engine.cpp	(revision 284)
++++ src/Engine.cpp	(working copy)
+@@ -42,6 +42,12 @@
+   #include "AST.h"
+ #endif
+ 
++#include <signal.h>
++
++static void KeyboardInterrupt(int signal) {
++  v8::V8::TerminateExecution();
++}
++
+ void CEngine::Expose(void)
+ {
+ #ifndef SUPPORT_SERIALIZE
+@@ -396,12 +402,21 @@
+ 
+   v8::Handle<v8::Value> result;
+ 
++  struct sigaction sa, sa_orig;
++
++  memset(&sa, 0, sizeof(sa));
++  sa.sa_handler = KeyboardInterrupt;
++  sigfillset(&sa.sa_mask);
++  sigaction(SIGINT, &sa, &sa_orig);
++
+   Py_BEGIN_ALLOW_THREADS
+ 
+   result = script->Run();
+ 
+   Py_END_ALLOW_THREADS
+ 
++  sigaction(SIGINT, &sa_orig, NULL);
++
+   if (result.IsEmpty())
+   {
+     if (try_catch.HasCaught()) CJavascriptException::ThrowIf(try_catch);
+@@ -621,3 +636,4 @@
+ }
+ 
+ #endif // SUPPORT_PROFILER
++
